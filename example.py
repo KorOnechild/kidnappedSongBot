@@ -2,18 +2,24 @@ import discord
 import yt_dlp as youtube_dl
 from discord.ext import commands
 from youtubesearchpython import VideosSearch
-import asyncio
 import os  # To use environment variables for token security
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
-queue = []  # Queue to store the URLs
-titles = []  # Queue to store the song titles
+queue = []  # URL 주소 추가하는 큐
+titles = []  # String 값 큐
 is_playing = False  # To track if the bot is currently playing a song
 current_song = None  # Variable to track the currently playing song
 current_title = None  # Variable to track the title of the currently playing song
+ydl_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'noplaylist': True,
+            'extract_flat': False,  # fulltitle 사용을 위해 False로 설정
+            'cookiefile': '/home/ubuntu/app/cookies.txt'  # 쿠키 파일 경로
+        }
 
 @bot.command(name='재생')
 async def play(ctx, *, search: str):
@@ -28,7 +34,13 @@ async def play(ctx, *, search: str):
     video_url = search_song(search)  # await 제거
 
     if video_url:
-        queue.append(video_url)  # URL 추가
+
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            current_title = info['fulltitle']  # 정확한 노래 제목 저장
+            queue.append(video_url)  # URL 추가
+            titles.append(current_title)
+
         await ctx.send(f"재생목록에 추가합니다: {video_url}")
 
         if not is_playing:
@@ -62,26 +74,19 @@ async def play_next_song(ctx):
     if queue:
         is_playing = True
         current_song = queue.pop(0)
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'quiet': True,
-            'noplaylist': True,
-            'extract_flat': False,  # fulltitle 사용을 위해 False로 설정
-        }
-
+        current_title = titles.pop(0)
+    
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(current_song, download=False)
             URL = info['url']
-            current_title = info['fulltitle']  # 정확한 노래 제목 저장
-
         FFMPEG_OPTIONS = {
-            'executable': 'D:\\ffmpeg\\bin\\ffmpeg.exe',
+            'executable': '/usr/bin/ffmpeg',
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
             'options': '-vn'
         }
 
         voice = bot.voice_clients[0]
-        voice.play(discord.FFmpegPCMAudio(URL, **FFMPEG_OPTIONS), after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(ctx), bot.loop).result())
+        voice.play(discord.FFmpegPCMAudio(URL, **FFMPEG_OPTIONS))
         await ctx.send(f"현재 재생중인 노래: {current_title}")
     else:
         is_playing = False
@@ -89,21 +94,26 @@ async def play_next_song(ctx):
 
 @bot.command(name='재생목록')
 async def playList(ctx):
+    global current_title, current_song
     if current_title or titles:
         playlist = ""
-        
         if current_title:
-            playlist += f"현재 재생 중: {current_title}\n"
+            playlist += f"현재 재생 중: {current_title}\n{current_song}\n현재 재생 목록:\n"
         if titles:
             playlist += "\n".join([f"{i+1}. {title}" for i, title in enumerate(titles)])
-        await ctx.send(f"현재 재생 목록:\n{playlist}")
+        await ctx.send(f"{playlist}")
     else:
         await ctx.send("재생 목록이 비어 있습니다.")
 
 @bot.command(name='종료')
 async def leave(ctx):
+    global is_playing, current_title, current_song
     if bot.voice_clients:
+        is_playing = False
+        current_song = None  
+        current_title = None  
         queue.clear()
+        titles.clear()
         await bot.voice_clients[0].disconnect()
         await ctx.send("연결을 종료했습니다.")
     else:
